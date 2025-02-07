@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/kelseyhightower/envconfig"
@@ -59,7 +60,7 @@ const (
 	// Duration the /wait-for-drain handler should wait before returning.
 	// This is to give networking a little bit more time to remove the pod
 	// from its configuration and propagate that to all loadbalancers and nodes.
-	drainSleepDuration = 30 * time.Second
+	drainSleepDuration = 15 * time.Second
 
 	// certPath is the path for the server certificate mounted by queue-proxy.
 	certPath = queue.CertDirectory + "/" + certificates.CertName
@@ -169,6 +170,8 @@ func Main(opts ...Option) error {
 	d := Defaults{
 		Ctx: signals.NewContext(),
 	}
+	pendingRequests := atomic.Int32{}
+	pendingRequests.Store(0)
 
 	// Parse the environment.
 	var env config
@@ -234,7 +237,7 @@ func Main(opts ...Option) error {
 	// Enable TLS when certificate is mounted.
 	tlsEnabled := exists(logger, certPath) && exists(logger, keyPath)
 
-	mainHandler, drainer := mainHandler(d.Ctx, env, d.Transport, probe, stats, logger)
+	mainHandler, drainer := mainHandler(d.Ctx, env, d.Transport, probe, stats, logger, &pendingRequests)
 	adminHandler := adminHandler(d.Ctx, logger, drainer)
 
 	// Enable TLS server when activator server certs are mounted.
@@ -306,15 +309,36 @@ func Main(opts ...Option) error {
 		logger.Infof("Sleeping %v to allow K8s propagation of non-ready state", drainSleepDuration)
 		drainer.Drain()
 
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(env.RevisionTimeoutSeconds)*time.Second)
+		defer cancel()
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		logger.Infof("Drain: waiting for %d pending requests to complete", pendingRequests.Load())
+	WaitOnPendingRequests:
+		for {
+			select {
+			case <-ctx.Done():
+				logger.Infof("Drain: timeout waiting for pending requests to complete")
+				break WaitOnPendingRequests
+			case <-ticker.C:
+				if pendingRequests.Load() <= 0 {
+					logger.Infof("Drain: all pending requests completed")
+					break WaitOnPendingRequests
+				}
+			}
+		}
+		time.Sleep(drainSleepDuration)
+
 		for name, srv := range httpServers {
 			logger.Info("Shutting down server: ", name)
-			if err := srv.Shutdown(context.Background()); err != nil {
+			if err := srv.Shutdown(ctx); err != nil {
 				logger.Errorw("Failed to shutdown server", zap.String("server", name), zap.Error(err))
 			}
 		}
 		for name, srv := range tlsServers {
 			logger.Info("Shutting down server: ", name)
-			if err := srv.Shutdown(context.Background()); err != nil {
+			if err := srv.Shutdown(ctx); err != nil {
 				logger.Errorw("Failed to shutdown server", zap.String("server", name), zap.Error(err))
 			}
 		}
