@@ -189,10 +189,12 @@ func (a *autoscaler) Scale(logger *zap.SugaredLogger, now time.Time) ScaleResult
 	if debugEnabled {
 		desugared.Debug(
 			fmt.Sprintf("For metric %s observed values: stable = %0.3f; panic = %0.3f; target = %0.3f "+
-				"Desired StablePodCount = %0.0f, PanicPodCount = %0.0f, ReadyEndpointCount = %d, MaxScaleUp = %0.0f, MaxScaleDown = %0.0f",
+				"Desired StablePodCount = %0.0f, PanicPodCount = %0.0f, ReadyEndpointCount = %d, MaxScaleUp = %0.0f, MaxScaleDown = %0.0f, ScaleBuffer = %d",
 				metricName, observedStableValue, observedPanicValue, spec.TargetValue,
-				dspc, dppc, originalReadyPodsCount, maxScaleUp, maxScaleDown))
+				dspc, dppc, originalReadyPodsCount, maxScaleUp, maxScaleDown, spec.ScaleBuffer))
 	}
+	dspc += float64(spec.ScaleBuffer)
+	dppc += float64(spec.ScaleBuffer)
 
 	// We want to keep desired pod count in the  [maxScaleDown, maxScaleUp] range.
 	desiredStablePodCount := int32(math.Min(math.Max(dspc, maxScaleDown), maxScaleUp))
