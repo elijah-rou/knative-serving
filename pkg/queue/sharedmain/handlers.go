@@ -20,12 +20,15 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
 	netheader "knative.dev/networking/pkg/http/header"
 	netproxy "knative.dev/networking/pkg/http/proxy"
 	netstats "knative.dev/networking/pkg/http/stats"
+	"knative.dev/pkg/network"
 	pkghandler "knative.dev/pkg/network/handlers"
 	"knative.dev/pkg/tracing"
 	tracingconfig "knative.dev/pkg/tracing/config"
@@ -43,6 +46,7 @@ func mainHandler(
 	prober func() bool,
 	stats *netstats.RequestStats,
 	logger *zap.SugaredLogger,
+	pendingRequests *atomic.Int32,
 ) (http.Handler, *pkghandler.Drainer) {
 	target := net.JoinHostPort("127.0.0.1", env.UserPort)
 
@@ -86,6 +90,8 @@ func mainHandler(
 
 	composedHandler = withFullDuplex(composedHandler, env.EnableHTTPFullDuplex, logger)
 
+	composedHandler = withRequestCounter(composedHandler, pendingRequests)
+
 	drainer := &pkghandler.Drainer{
 		QuietPeriod: drainSleepDuration,
 		// Add Activator probe header to the drainer so it can handle probes directly from activator
@@ -100,6 +106,7 @@ func mainHandler(
 		// Hence we need to have RequestLogHandler be the first one.
 		composedHandler = requestLogHandler(logger, composedHandler, env)
 	}
+
 	return composedHandler, drainer
 }
 
@@ -135,6 +142,16 @@ func withFullDuplex(h http.Handler, enableFullDuplex bool, logger *zap.SugaredLo
 		rc := http.NewResponseController(w)
 		if err := rc.EnableFullDuplex(); err != nil {
 			logger.Errorw("Unable to enable full duplex", zap.Error(err))
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+func withRequestCounter(h http.Handler, pendingRequests *atomic.Int32) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(network.ProbeHeaderName) != network.ProbeHeaderValue && !strings.HasPrefix(r.Header.Get("User-Agent"), "kube-probe/") {
+			pendingRequests.Add(1)
+			defer pendingRequests.Add(-1)
 		}
 		h.ServeHTTP(w, r)
 	})
