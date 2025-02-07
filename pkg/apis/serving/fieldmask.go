@@ -345,10 +345,11 @@ func VolumeMountMask(in *corev1.VolumeMount) *corev1.VolumeMount {
 	out.ReadOnly = in.ReadOnly
 	out.MountPath = in.MountPath
 	out.SubPath = in.SubPath
+	out.MountPropagation = in.MountPropagation
 
 	// Disallowed fields
 	// This list is unnecessary, but added here for clarity
-	out.MountPropagation = nil
+	out.RecursiveReadOnly = nil
 
 	return out
 }
