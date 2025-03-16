@@ -616,7 +616,7 @@ func validate(ctx context.Context, container corev1.Container, volumes map[strin
 		errs = errs.Also(apis.ErrInvalidValue(container.TerminationMessagePolicy, "terminationMessagePolicy"))
 	}
 	// VolumeMounts
-	isPrivilegedContainer := container.SecurityContext != nil && *container.SecurityContext.Privileged
+	isPrivilegedContainer := container.SecurityContext != nil && container.SecurityContext.Privileged != nil && *container.SecurityContext.Privileged
 	errs = errs.Also(validateVolumeMounts(ctx, container.VolumeMounts, volumes, isPrivilegedContainer).ViaField("volumeMounts"))
 
 	return errs
@@ -707,15 +707,9 @@ func validateVolumeMounts(ctx context.Context, mounts []corev1.VolumeMount, volu
 					Message: fmt.Sprintf("Volume Mount Propagation support is disabled, but found volume mount %s with mount propagation", vm.Name),
 				}).ViaIndex(i))
 			}
-			if *vm.MountPropagation != corev1.MountPropagationNone && *vm.MountPropagation != corev1.MountPropagationHostToContainer && *vm.MountPropagation != corev1.MountPropagationBidirectional {
+			if *vm.MountPropagation != corev1.MountPropagationNone && *vm.MountPropagation != corev1.MountPropagationHostToContainer {
 				errs = errs.Also((&apis.FieldError{
-					Message: "mount propagation should be set to None, HostToContainer or Bidirectional",
-					Paths:   []string{"mountPropagation"},
-				}).ViaIndex(i))
-			}
-			if *vm.MountPropagation == corev1.MountPropagationBidirectional && !isPrivilegedContainer {
-				errs = errs.Also((&apis.FieldError{
-					Message: "mount propagation is set to bidirectional, but host container is not privileged",
+					Message: "mount propagation should be set to None or HostToContainer",
 					Paths:   []string{"mountPropagation"},
 				}).ViaIndex(i))
 			}
